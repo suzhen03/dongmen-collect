@@ -4,40 +4,80 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>路灯采集</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-html,body{height:100%;font-family:'PingFang SC','Microsoft YaHei',sans-serif}
-#map{height:100%}
-#bar{position:fixed;bottom:0;left:0;right:0;z-index:9999;background:rgba(0,0,0,0.85);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between}
-#bar .count{font-size:18px;font-weight:bold;color:#fbbf24}
-#bar .hint{font-size:13px;color:#aaa}
-#bar button{padding:12px 24px;border:none;border-radius:10px;font-size:16px;font-weight:bold;cursor:pointer}
-#bar .btn-on{background:#ef4444;color:#fff}
-#bar .btn-off{background:#fbbf24;color:#000}
-#toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:99999;background:#22c55e;color:#fff;padding:10px 24px;border-radius:20px;font-size:16px;font-weight:bold;display:none;box-shadow:0 4px 20px rgba(34,197,94,0.4)}
-#toast.show{display:block;animation:fadeIn 0.3s}
-@keyframes fadeIn{from{opacity:0;transform:translateX(-50%) translateY(-10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+html,body{height:100%;font-family:'PingFang SC','Microsoft YaHei',sans-serif;background:#000}
+#map{height:100%;background:#111}
+/* 加载中 */
+#loading{position:fixed;inset:0;z-index:99999;background:#000;display:flex;align-items:center;justify-content:center;color:#fff;font-size:18px}
+#loading.hide{display:none}
+/* 底部栏 */
+#bar{position:fixed;bottom:0;left:0;right:0;z-index:9999;background:rgba(0,0,0,0.9);color:#fff;padding:14px 16px;padding-bottom:max(14px,env(safe-area-inset-bottom));display:flex;align-items:center;justify-content:space-between}
+#bar .info{display:flex;flex-direction:column}
+#bar .count{font-size:22px;font-weight:bold;color:#fbbf24}
+#bar .hint{font-size:14px;color:#aaa;margin-top:2px}
+#bar button{padding:14px 28px;border:none;border-radius:12px;font-size:18px;font-weight:bold;cursor:pointer;min-width:120px;-webkit-tap-highlight-color:transparent}
+.btn-place{background:#ef4444;color:#fff;box-shadow:0 0 20px rgba(239,68,68,0.5)}
+.btn-pan{background:#fbbf24;color:#000}
+/* 提示 */
+#toast{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:#22c55e;color:#fff;padding:14px 28px;border-radius:16px;font-size:20px;font-weight:bold;display:none;box-shadow:0 8px 32px rgba(34,197,94,0.5)}
+#toast.show{display:block;animation:pop 0.3s}
+@keyframes pop{from{opacity:0;transform:translate(-50%,-50%) scale(0.8)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+/* 底图切换 */
+#tiles{position:fixed;top:12px;right:12px;z-index:9999;display:flex;gap:6px}
+#tiles button{padding:8px 14px;border:none;border-radius:8px;font-size:13px;font-weight:bold;cursor:pointer;background:rgba(255,255,255,0.9);color:#333}
+#tiles button.active{background:#fbbf24;color:#000}
 </style>
 </head>
 <body>
+<div id="loading">🗺️ 加载地图中...</div>
 <div id="map"></div>
 <div id="toast"></div>
+<div id="tiles">
+  <button class="active" onclick="switchTile('amap')">高德卫星</button>
+  <button onclick="switchTile('google')">Google</button>
+</div>
 <div id="bar">
-  <div>
+  <div class="info">
     <div class="count" id="cnt">0 盏</div>
-    <div class="hint" id="hint">点右边按钮开始标注</div>
+    <div class="hint" id="hint">拖动地图找位置，点按钮开始标注</div>
   </div>
-  <button id="modeBtn" class="btn-off" onclick="toggleMode()">🎯 开始标注</button>
+  <button id="modeBtn" class="btn-pan" onclick="toggleMode()">🎯 标注</button>
 </div>
 <script>
-// === Supabase 配置 ===
-const SUPABASE_URL = 'https://ogsmzdkmbwlpqwtansxr.supabase.co'
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nc216ZGttYndscHF3dGFuc3hyIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NDI3MDg2MiwiZXhwIjoyMDk5ODQ2ODYyfQ.O93B85dzFGYEicBb9kt3DTpywB-gKtCtnbwEq9_eklg'
-const { createClient } = supabase
-const db = createClient(SUPABASE_URL, SUPABASE_KEY)
+// === Supabase ===
+const db = supabase.createClient(
+  'https://ogsmzdkmbwlpqwtansxr.supabase.co',
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nc216ZGttYndscHF3dGFuc3hyIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NDI3MDg2MiwiZXhwIjoyMDk5ODQ2ODYyfQ.O93B85dzFGYEicBb9kt3DTpywB-gKtCtnbwEq9_eklg'
+)
+
+// === 地图瓦片（高德优先，国内手机网络兼容） ===
+const TILES = {
+  amap: {
+    url: 'https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',
+    sub: ['1','2','3','4'], label: '高德卫星'
+  },
+  google: {
+    url: 'https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+    sub: ['0','1','2','3'], label: 'Google'
+  }
+}
+let currentTile = 'amap'
+let tileLayer = null
+
+function switchTile(type) {
+  currentTile = type
+  if (tileLayer) map.removeLayer(tileLayer)
+  const cfg = TILES[type]
+  tileLayer = L.tileLayer(cfg.url, {
+    maxNativeZoom: 20, maxZoom: 22, subdomains: cfg.sub
+  }).addTo(map)
+  document.querySelectorAll('#tiles button').forEach(b => b.className = '')
+  event.target.className = 'active'
+}
 
 // === 地图 ===
 const map = L.map('map', {
@@ -45,31 +85,33 @@ const map = L.map('map', {
   zoomControl: false, attributionControl: false
 })
 L.control.zoom({ position: 'bottomleft' }).addTo(map)
-L.tileLayer('https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
-  maxNativeZoom: 20, maxZoom: 22, subdomains: ['0','1','2','3']
-}).addTo(map)
+switchTile('amap')
+
+// 隐藏加载画面
+setTimeout(() => document.getElementById('loading').classList.add('hide'), 1500)
 
 let placeMode = false
-let markers = []
 let count = 0
 
 // 加载已有数据
 async function loadExisting() {
-  const { data } = await db.from('streetlights').select('*')
-  if (data) {
-    data.forEach(l => {
-      const m = L.marker([l.lat, l.lng], {
-        icon: L.divIcon({
-          className: '',
-          html: '<div style="width:16px;height:16px;background:#fbbf24;border:2px solid #fff;border-radius:50%;box-shadow:0 0 10px rgba(251,191,36,0.8),0 1px 3px rgba(0,0,0,0.4)"></div>',
-          iconSize: [20,20], iconAnchor: [10,10]
-        })
-      }).addTo(map)
-      m.bindPopup(`<div style="text-align:center;padding:8px;"><b>${l.name||l.id}</b></div>`)
-      markers.push(m)
-    })
-    count = data.length
-    updateBar()
+  try {
+    const { data } = await db.from('streetlights').select('*')
+    if (data) {
+      data.forEach(l => {
+        L.marker([l.lat, l.lng], {
+          icon: L.divIcon({
+            className: '',
+            html: '<div style="width:14px;height:14px;background:#fbbf24;border:2px solid #fff;border-radius:50%;box-shadow:0 0 10px rgba(251,191,36,0.8)"></div>',
+            iconSize: [18,18], iconAnchor: [9,9]
+          })
+        }).addTo(map).bindPopup(`<div style="text-align:center;padding:8px;font-size:16px"><b>${l.name||l.id}</b></div>`)
+      })
+      count = data.length
+      updateBar()
+    }
+  } catch(e) {
+    document.getElementById('hint').textContent = '网络异常，无法加载已有数据'
   }
 }
 
@@ -83,21 +125,21 @@ function toggleMode() {
   const btn = document.getElementById('modeBtn')
   const hint = document.getElementById('hint')
   if (placeMode) {
-    btn.className = 'btn-on'
-    btn.textContent = '🎯 标注中…'
+    btn.className = 'btn-place'
+    btn.textContent = '🎯 标注中'
     hint.textContent = '点击地图放置路灯'
     map.getContainer().style.cursor = 'crosshair'
     map.dragging.disable()
   } else {
-    btn.className = 'btn-off'
-    btn.textContent = '🎯 开始标注'
-    hint.textContent = '点右边按钮开始标注'
+    btn.className = 'btn-pan'
+    btn.textContent = '🎯 标注'
+    hint.textContent = '拖动地图找位置，点按钮开始标注'
     map.getContainer().style.cursor = ''
     map.dragging.enable()
   }
 }
 
-// === 点击地图 → 标注 ===
+// === 点击标注 ===
 map.on('click', async (e) => {
   if (!placeMode) return
   const name = prompt('输入路灯编号（如 001）：')
@@ -111,34 +153,30 @@ map.on('click', async (e) => {
     status: '正常'
   }
 
-  // 保存到云端
-  const { error } = await db.from('streetlights').insert(light)
-  if (error) {
-    alert('保存失败: ' + error.message)
+  try {
+    const { error } = await db.from('streetlights').insert(light)
+    if (error) throw error
+  } catch(e) {
+    alert('保存失败，请检查网络: ' + (e.message||e))
     return
   }
 
-  // 添加标记
-  const m = L.marker([light.lat, light.lng], {
+  L.marker([light.lat, light.lng], {
     icon: L.divIcon({
       className: '',
-      html: '<div style="width:16px;height:16px;background:#fbbf24;border:2px solid #fff;border-radius:50%;box-shadow:0 0 10px rgba(251,191,36,0.8),0 1px 3px rgba(0,0,0,0.4)"></div>',
-      iconSize: [20,20], iconAnchor: [10,10]
+      html: '<div style="width:14px;height:14px;background:#fbbf24;border:2px solid #fff;border-radius:50%;box-shadow:0 0 10px rgba(251,191,36,0.8)"></div>',
+      iconSize: [18,18], iconAnchor: [9,9]
     })
-  }).addTo(map)
-  m.bindPopup(`<div style="text-align:center;padding:8px;"><b>${light.name}</b></div>`)
-  markers.push(m)
+  }).addTo(map).bindPopup(`<div style="text-align:center;padding:8px;font-size:16px"><b>${light.name}</b></div>`)
   count++
   updateBar()
 
-  // 提示
   const toast = document.getElementById('toast')
-  toast.textContent = '✅ 已保存 ' + light.name
+  toast.textContent = '✅ ' + light.name + ' 已保存'
   toast.className = 'show'
   setTimeout(() => toast.className = '', 1500)
 })
 
-// 启动
 loadExisting()
 </script>
 </body>
