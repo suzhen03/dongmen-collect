@@ -80,8 +80,9 @@ function initApp() {
     zoomControl: false, attributionControl: false
   })
   L.control.zoom({ position: 'bottomleft' }).addTo(map)
-  L.tileLayer('https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
-    maxNativeZoom: 20, maxZoom: 22, subdomains: ['0','1','2','3']
+  // 通过 Cloudflare Worker 代理 Google 瓦片（国内可用）
+  L.tileLayer('https://tile-proxy.1041067274.workers.dev/tiles/{z}/{x}/{y}.jpg', {
+    maxNativeZoom: 20, maxZoom: 22
   }).addTo(map)
 
   map.on('click', onMapClick)
