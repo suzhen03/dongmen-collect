@@ -4,10 +4,38 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>路灯采集</title>
+<!-- 多 CDN 备用：逐一尝试直到 Leaflet 加载成功 -->
+<script>
+var LEAF_CSS = [
+  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
+  'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css',
+  'https://lib.baomitu.com/leaflet/1.9.4/leaflet.min.css',
+]
+var LEAF_JS = [
+  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js',
+  'https://lib.baomitu.com/leaflet/1.9.4/leaflet.min.js',
+  'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js',
+]
+// 加载 CSS
+document.write('<link rel="stylesheet" href="'+LEAF_CSS[0]+'">')
+// 备用 JS 加载器
+function loadScript(urls, idx, cb) {
+  if (idx >= urls.length) { alert('地图加载失败，请检查网络'); return }
+  var s = document.createElement('script')
+  s.src = urls[idx]
+  s.onload = cb
+  s.onerror = function() { loadScript(urls, idx+1, cb) }
+  document.head.appendChild(s)
+}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-html,body{height:100%;font-family:'PingFang SC','Microsoft YaHei',sans-serif}
+html,body{height:100%;font-family:'PingFang SC','Microsoft YaHei',sans-serif;background:#000}
 #map{height:100%}
+#status{position:fixed;inset:0;z-index:99999;background:#000;display:flex;align-items:center;justify-content:center;color:#fff;font-size:18px}
+#status.done{display:none}
 #bar{position:fixed;bottom:0;left:0;right:0;z-index:9999;background:rgba(0,0,0,0.9);color:#fff;padding:14px 16px;padding-bottom:max(14px,env(safe-area-inset-bottom));display:flex;align-items:center;justify-content:space-between}
 #bar .info{display:flex;flex-direction:column}
 #bar .count{font-size:22px;font-weight:bold;color:#fbbf24}
@@ -21,6 +49,7 @@ html,body{height:100%;font-family:'PingFang SC','Microsoft YaHei',sans-serif}
 </style>
 </head>
 <body>
+<div id="status">加载中...</div>
 <div id="map"></div>
 <div id="toast"></div>
 <div id="bar">
@@ -31,99 +60,90 @@ html,body{height:100%;font-family:'PingFang SC','Microsoft YaHei',sans-serif}
   <button id="modeBtn" class="btn-pan" onclick="toggleMode()">标注</button>
 </div>
 
-<script src="https://webapi.amap.com/maps?v=2.0&key=eb49df710d26d1c822f313da2bf740e0"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
+// 等 Leaflet 加载完再初始化
+loadScript(LEAF_JS, 0, function() {
+  document.getElementById('status').classList.add('done')
+  initApp()
+})
+
 var db = supabase.createClient(
   'https://ogsmzdkmbwlpqwtansxr.supabase.co',
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nc216ZGttYndscHF3dGFuc3hyIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NDI3MDg2MiwiZXhwIjoyMDk5ODQ2ODYyfQ.O93B85dzFGYEicBb9kt3DTpywB-gKtCtnbwEq9_eklg'
 )
 
-var map, placeMode = false, count = 0, markers = []
+var map, placeMode = false, count = 0
 
-// 初始化地图
-map = new AMap.Map('map', {
-  center: [106.2217, 35.2135],
-  zoom: 17,
-  layers: [new AMap.TileLayer.Satellite()],
-  zoomEnable: true,
-  dragEnable: true
-})
+function initApp() {
+  map = L.map('map', {
+    center: [35.2135, 106.2217], zoom: 18,
+    zoomControl: false, attributionControl: false
+  })
+  L.control.zoom({ position: 'bottomleft' }).addTo(map)
+  L.tileLayer('https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+    maxNativeZoom: 20, maxZoom: 22, subdomains: ['0','1','2','3']
+  }).addTo(map)
 
-// 加载已有路灯
+  map.on('click', onMapClick)
+  loadExisting()
+}
+
+function mkIcon() {
+  return L.divIcon({
+    className: '',
+    html: '<div style="width:14px;height:14px;background:#fbbf24;border:2px solid #fff;border-radius:50%;box-shadow:0 0 10px rgba(251,191,36,0.8)"></div>',
+    iconSize: [18,18], iconAnchor: [9,9]
+  })
+}
+
+function updateBar() { document.getElementById('cnt').textContent = count + ' 盏' }
+
 async function loadExisting() {
   try {
     var r = await db.from('streetlights').select('*')
     if (r.data) {
       r.data.forEach(function(l) {
-        var m = new AMap.Marker({
-          position: [l.lng, l.lat],
-          icon: new AMap.Icon({
-            size: new AMap.Size(20, 20),
-            imageSize: new AMap.Size(20, 20),
-            image: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><circle cx="10" cy="10" r="8" fill="#fbbf24" stroke="#fff" stroke-width="2"/></svg>')
-          }),
-          label: { content: l.name||String(l.id), direction: 'top', offset: new AMap.Pixel(0, -8) }
-        })
-        m.on('click', function() { alert('路灯: ' + (l.name||l.id)) })
-        map.add(m)
-        markers.push(m)
+        L.marker([l.lat, l.lng], { icon: mkIcon() })
+          .addTo(map)
+          .bindPopup('<div style="text-align:center;padding:8px;font-size:16px"><b>'+(l.name||l.id)+'</b></div>')
       })
       count = r.data.length; updateBar()
     }
-  } catch(e) { document.getElementById('hint').textContent = '加载数据失败' }
+  } catch(e) {}
 }
 
-function updateBar() { document.getElementById('cnt').textContent = count + ' 盏' }
-
-// 模式切换
 function toggleMode() {
   placeMode = !placeMode
   var btn = document.getElementById('modeBtn'), hint = document.getElementById('hint')
   if (placeMode) {
     btn.className = 'btn-place'; btn.textContent = '标注中'
     hint.textContent = '点击地图放置路灯'
-    map.setStatus({ dragEnable: false })
+    map.getContainer().style.cursor = 'crosshair'; map.dragging.disable()
   } else {
     btn.className = 'btn-pan'; btn.textContent = '标注'
     hint.textContent = '拖动找位置，点按钮标注'
-    map.setStatus({ dragEnable: true })
+    map.getContainer().style.cursor = ''; map.dragging.enable()
   }
 }
 
-// 点击标注
-map.on('click', async function(e) {
+async function onMapClick(e) {
   if (!placeMode) return
   var name = prompt('输入路灯编号（如 001）：')
   if (!name) return
-
-  var lnglat = e.lnglat
-  var light = { name: name.trim(), lat: parseFloat(lnglat.lat.toFixed(6)), lng: parseFloat(lnglat.lng.toFixed(6)), is_tenure_added: true, status: '正常' }
-
+  var light = { name: name.trim(), lat: parseFloat(e.latlng.lat.toFixed(6)), lng: parseFloat(e.latlng.lng.toFixed(6)), is_tenure_added: true, status: '正常' }
   try {
     var r = await db.from('streetlights').insert(light)
     if (r.error) throw r.error
-  } catch(err) { alert('保存失败: ' + (err.message||err)); return }
-
-  var m = new AMap.Marker({
-    position: [light.lng, light.lat],
-    icon: new AMap.Icon({
-      size: new AMap.Size(20, 20),
-      imageSize: new AMap.Size(20, 20),
-      image: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><circle cx="10" cy="10" r="8" fill="#fbbf24" stroke="#fff" stroke-width="2"/></svg>')
-    }),
-    label: { content: light.name, direction: 'top', offset: new AMap.Pixel(0, -8) }
-  })
-  map.add(m); markers.push(m)
+  } catch(err) { alert('保存失败: '+(err.message||err)); return }
+  L.marker([light.lat, light.lng], { icon: mkIcon() })
+    .addTo(map)
+    .bindPopup('<div style="text-align:center;padding:8px;font-size:16px"><b>'+light.name+'</b></div>')
   count++; updateBar()
-
   var t = document.getElementById('toast')
   t.textContent = light.name + ' 已保存'
   t.className = 'show'
   setTimeout(function() { t.className = '' }, 1500)
-})
-
-loadExisting()
+}
 </script>
 </body>
 </html>
